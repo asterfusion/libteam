@@ -84,7 +84,7 @@ static int get_port_obj(json_t **pport_obj, json_t *config_json,
 		ports_obj = json_object();
 		if (!ports_obj)
 			return -ENOMEM;
-		err = json_object_set(config_json, "ports", ports_obj);
+		err = json_object_set_new(config_json, "ports", ports_obj);
 		if (err) {
 			json_decref(ports_obj);
 			return -ENOMEM;
@@ -95,7 +95,7 @@ static int get_port_obj(json_t **pport_obj, json_t *config_json,
 		port_obj = json_object();
 		if (!port_obj)
 			return -ENOMEM;
-		err = json_object_set(ports_obj, port_name, port_obj);
+		err = json_object_set_new(ports_obj, port_name, port_obj);
 		if (err) {
 			json_decref(port_obj);
 			return -ENOMEM;
@@ -164,20 +164,22 @@ static int teamd_config_port_set(struct teamd_context *ctx, const char *port_nam
 
 	tdport = teamd_get_port_by_ifname(ctx, port_name);
 	if (!tdport)
-		return -ENODEV;
+		return 0;
 
 	config = json_object_get(port_obj, "prio");
-	if (json_is_integer(config)) {
-		tmp = json_integer_value(config);
-		err = team_set_port_priority(ctx->th, tdport->ifindex, tmp);
-		if (err) {
-			teamd_log_err("%s: Failed to set \"priority\".",
-				      tdport->ifname);
-			return err;
-		}
+	if (!json_is_integer(config)) {
+		teamd_log_err("%s: Failed to get integer for \"priority\".",
+			      tdport->ifname);
+		return -ENOENT;
 	}
 
-	return 0;
+	tmp = json_integer_value(config);
+	err = team_set_port_priority(ctx->th, tdport->ifindex, tmp);
+	if (err)
+		teamd_log_err("%s: Failed to update \"priority\" to kernel",
+			      tdport->ifname);
+
+	return err;
 }
 
 int teamd_config_port_update(struct teamd_context *ctx, const char *port_name,
@@ -206,15 +208,13 @@ int teamd_config_port_update(struct teamd_context *ctx, const char *port_name,
 	/* replace existing object content */
 	json_object_clear(port_obj);
 	err = json_object_update(port_obj, port_new_obj);
-	if (err)
+	if (err) {
 		teamd_log_err("%s: Failed to update existing config "
 			      "port object", port_name);
-	else {
-		err = teamd_config_port_set(ctx, port_name, port_new_obj);
-		if (err)
-			teamd_log_err("%s: Failed to update config to kernel",
-				      port_name);
+		goto new_port_decref;
 	}
+
+	err = teamd_config_port_set(ctx, port_name, port_new_obj);
 
 new_port_decref:
 	json_decref(port_new_obj);
